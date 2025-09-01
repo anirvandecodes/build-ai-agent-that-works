@@ -3,3 +3,7 @@ langchain-community==0.3.29
 langgraph==0.6.6
 python-dotenv==1.1.1
 databricks-langchain==0.7.1
+databricks-agents==1.4.0
+langgraph-supervisor==0.0.29
+Markdown==3.8.2
+
