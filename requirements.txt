@@ -6,4 +6,8 @@ databricks-langchain==0.7.1
 databricks-agents==1.4.0
 langgraph-supervisor==0.0.29
 Markdown==3.8.2
+uv==0.8.14
+wikipedia
+langchain-tavily==0.2.11
+
 
