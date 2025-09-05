@@ -42,7 +42,7 @@ class LangGraphResponsesAgent(ResponsesAgent):
         self.agent = agent
 
     def _responses_to_cc(self, message: dict[str, Any]) -> list[dict[str, Any]]:
-        # Simplified: just handle normal messages and tool calls
+        """Convert from a Responses API output item to ChatCompletion messages."""
         msg_type = message.get("type")
         if msg_type == "function_call":
             return [
@@ -61,6 +61,13 @@ class LangGraphResponsesAgent(ResponsesAgent):
                     ],
                 }
             ]
+        elif msg_type == "message" and isinstance(message["content"], list):
+            return [
+                {"role": message["role"], "content": content["text"]}
+                for content in message["content"]
+            ]
+        elif msg_type == "reasoning":
+            return [{"role": "assistant", "content": json.dumps(message["summary"])}]
         elif msg_type == "function_call_output":
             return [
                 {
@@ -69,40 +76,48 @@ class LangGraphResponsesAgent(ResponsesAgent):
                     "tool_call_id": message["call_id"],
                 }
             ]
-        elif msg_type == "message" and isinstance(message["content"], list):
-            return [{"role": message["role"], "content": c["text"]} for c in message["content"]]
-        return [{"role": message.get("role", "assistant"), "content": message.get("content", "")}]
+        compatible_keys = ["role", "content", "name", "tool_calls", "tool_call_id"]
+        filtered = {k: v for k, v in message.items() if k in compatible_keys}
+        return [filtered] if filtered else []
 
-    def _langchain_to_responses(self, messages) -> list[dict[str, Any]]:
-        outputs = []
+    def _prep_msgs_for_cc_llm(self, responses_input) -> list[dict[str, Any]]:
+        "Convert from Responses input items to ChatCompletion dictionaries"
+        cc_msgs = []
+        for msg in responses_input:
+            cc_msgs.extend(self._responses_to_cc(msg.model_dump()))
+
+    def _langchain_to_responses(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        "Convert from ChatCompletion dict to Responses output item dictionaries"
         for message in messages:
             message = message.model_dump()
-            if message["type"] == "ai":
+            role = message["type"]
+            if role == "ai":
                 if tool_calls := message.get("tool_calls"):
-                    for tc in tool_calls:
-                        outputs.append(
-                            self.create_function_call_item(
-                                id=message.get("id") or str(uuid4()),
-                                call_id=tc["id"],
-                                name=tc["name"],
-                                arguments=json.dumps(tc["args"]),
-                            )
+                    return [
+                        self.create_function_call_item(
+                            id=message.get("id") or str(uuid4()),
+                            call_id=tool_call["id"],
+                            name=tool_call["name"],
+                            arguments=json.dumps(tool_call["args"]),
                         )
+                        for tool_call in tool_calls
+                    ]
                 else:
-                    outputs.append(
+                    return [
                         self.create_text_output_item(
                             text=message["content"],
                             id=message.get("id") or str(uuid4()),
                         )
-                    )
-            elif message["type"] == "tool":
-                outputs.append(
+                    ]
+            elif role == "tool":
+                return [
                     self.create_function_call_output_item(
                         call_id=message["tool_call_id"],
                         output=message["content"],
                     )
-                )
-        return outputs
+                ]
+            elif role == "user":
+                return [message]
 
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
         outputs = [
@@ -116,7 +131,6 @@ class LangGraphResponsesAgent(ResponsesAgent):
         self,
         request: ResponsesAgentRequest,
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
-        
         cc_msgs = []
         for msg in request.input:
             cc_msgs.extend(self._responses_to_cc(msg.model_dump()))
@@ -125,17 +139,17 @@ class LangGraphResponsesAgent(ResponsesAgent):
             if event[0] == "updates":
                 for node_data in event[1].values():
                     for item in self._langchain_to_responses(node_data["messages"]):
-                        if isinstance(item, (bool, str, bytes, int, float)) or item is None:
-                            yield ResponsesAgentStreamEvent(type="response.output_item.done", item=item)
+                        yield ResponsesAgentStreamEvent(type="response.output_item.done", item=item)
+            # filter the streamed messages to just the generated text messages
             elif event[0] == "messages":
-                chunk = event[1][0]
-                if isinstance(chunk, AIMessageChunk) and (content := chunk.content):
-                    if isinstance(content, (bool, str, bytes, int, float)) or content is None:
+                try:
+                    chunk = event[1][0]
+                    if isinstance(chunk, AIMessageChunk) and (content := chunk.content):
                         yield ResponsesAgentStreamEvent(
                             **self.create_text_delta(delta=content, item_id=chunk.id),
                         )
-
-
+                except Exception as e:
+                    print(e)
 
 
 def create_tool_calling_agent(
