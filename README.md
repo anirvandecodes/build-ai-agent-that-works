@@ -1,4 +1,4 @@
-# AI Agents Masterclass - Complete Learning Journey
+# Build Ai Agents - Complete Learning Journey
 
 A comprehensive end-to-end tutorial series covering the complete lifecycle of building, deploying, and monitoring AI agents using modern GenAI frameworks.
 
